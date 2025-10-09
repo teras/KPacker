@@ -231,7 +231,7 @@ object MacX64Configurator : Configurator {
         val appBundlePath = outputDirPath / "${app.name}.app"
         val dmgPath = outputDirPath / "${app.name}-${app.version}.dmg"
 
-        if (DEBUG) println("Creating DMG for ${app.name}")
+        if (DEBUG) println("Creating DMG for ${app.name}${if (!app.dmgCompress) " (uncompressed)" else ""}")
 
         // Check if user provided a DMG template
         val dmgTemplate = app.dmgTemplate
@@ -385,8 +385,7 @@ object MacX64Configurator : Configurator {
                 if (fs.exists(applicationsLink)) {
                     fs.delete(applicationsLink)
                 }
-                val createLinkCommand = Command("ln", "-s", "/Applications", applicationsLink.toString())
-                createLinkCommand.exec().waitFor()
+                onl.ycode.koren.Files.createSymlink("/Applications", applicationsLink.toString())
                 if (DEBUG) println("Recreated Applications symlink")
 
                 if (DEBUG) println("Merged template contents and replaced app bundle")
@@ -401,28 +400,35 @@ object MacX64Configurator : Configurator {
                 detachCommand.exec().waitFor()
             }
 
-            // Compress DMG using container (like Nim's podman dmg command)
-            val containerCommand = Command(
-                "docker",
-                "run",
-                "--rm",
-                "-t",
-                "-v",
-                "$outputDir:/data",
-                "docker.io/teras/appimage-builder",
-                "sh",
-                "-c",
-                "dmg /data/${app.name}-${app.version}-uncompressed.dmg /data/${app.name}-${app.version}.dmg"
-            )
-            exitCode = containerCommand.exec().waitFor()
-            if (exitCode != 0) throw RuntimeException("Failed to compress DMG")
+            // Compress DMG if requested
+            if (app.dmgCompress) {
+                // Compress DMG using container (like Nim's podman dmg command)
+                val containerCommand = Command(
+                    "docker",
+                    "run",
+                    "--rm",
+                    "-t",
+                    "-v",
+                    "$outputDir:/data",
+                    "docker.io/teras/appimage-builder",
+                    "sh",
+                    "-c",
+                    "dmg /data/${app.name}-${app.version}-uncompressed.dmg /data/${app.name}-${app.version}.dmg"
+                )
+                exitCode = containerCommand.exec().waitFor()
+                if (exitCode != 0) throw RuntimeException("Failed to compress DMG")
 
-            // Clean up uncompressed DMG
-            if (fs.exists(uncompressedDmgPath)) {
-                fs.delete(uncompressedDmgPath)
+                // Clean up uncompressed DMG
+                if (fs.exists(uncompressedDmgPath)) {
+                    fs.delete(uncompressedDmgPath)
+                }
+
+                if (DEBUG) println("DMG created successfully from template: $dmgPath")
+            } else {
+                // Rename uncompressed to final name
+                fs.atomicMove(uncompressedDmgPath, dmgPath)
+                if (DEBUG) println("Uncompressed DMG created successfully from template: $dmgPath")
             }
-
-            if (DEBUG) println("DMG created successfully from template: $dmgPath")
 
         } finally {
             // Clean up temporary uncompressed DMG
@@ -588,9 +594,7 @@ object MacX64Configurator : Configurator {
                 FileUtils.copyDirectory(fs, appBundlePath, mountPointPath / "${app.name}.app")
 
                 // Create Applications symlink
-                val applicationsCommand =
-                    Command("ln", "-s", "/Applications", (mountPointPath / "Applications").toString())
-                applicationsCommand.exec().waitFor()
+                onl.ycode.koren.Files.createSymlink("/Applications", (mountPointPath / "Applications").toString())
 
                 if (DEBUG) println("Copied app bundle and created Applications symlink")
 
@@ -604,28 +608,35 @@ object MacX64Configurator : Configurator {
                 detachCommand.exec().waitFor()
             }
 
-            // Compress DMG using container (following makeapp approach)
-            val containerCommand = Command(
-                "docker",
-                "run",
-                "--rm",
-                "-t",
-                "-v",
-                "$outputDir:/data",
-                "docker.io/teras/appimage-builder",
-                "sh",
-                "-c",
-                "dmg /data/${app.name}-${app.version}-uncompressed.dmg /data/${app.name}-${app.version}.dmg"
-            )
-            exitCode = containerCommand.exec().waitFor()
-            if (exitCode != 0) throw RuntimeException("Failed to compress DMG")
+            // Compress DMG if requested
+            if (app.dmgCompress) {
+                // Compress DMG using container (following makeapp approach)
+                val containerCommand = Command(
+                    "docker",
+                    "run",
+                    "--rm",
+                    "-t",
+                    "-v",
+                    "$outputDir:/data",
+                    "docker.io/teras/appimage-builder",
+                    "sh",
+                    "-c",
+                    "dmg /data/${app.name}-${app.version}-uncompressed.dmg /data/${app.name}-${app.version}.dmg"
+                )
+                exitCode = containerCommand.exec().waitFor()
+                if (exitCode != 0) throw RuntimeException("Failed to compress DMG")
 
-            // Clean up uncompressed DMG
-            if (fs.exists(uncompressedDmgPath)) {
-                fs.delete(uncompressedDmgPath)
+                // Clean up uncompressed DMG
+                if (fs.exists(uncompressedDmgPath)) {
+                    fs.delete(uncompressedDmgPath)
+                }
+
+                if (DEBUG) println("DMG created successfully: ${dmgPath}")
+            } else {
+                // Rename uncompressed to final name
+                fs.atomicMove(uncompressedDmgPath, dmgPath)
+                if (DEBUG) println("Uncompressed DMG created successfully: ${dmgPath}")
             }
-
-            if (DEBUG) println("DMG created successfully: ${dmgPath}")
 
         } catch (e: Exception) {
             if (DEBUG) println("DMG creation failed: ${e.message}")

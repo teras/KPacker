@@ -58,8 +58,7 @@ abstract class LinuxBaseConfigurator : Configurator {
         }
 
         // Create AppRun as symlink to the binary
-        val lnCmd = Command("ln", "-sf", "bin/${app.name}", (appDir / "AppRun").toString())
-        lnCmd.exec().waitFor()
+        onl.ycode.koren.Files.createSymlink("bin/${app.name}", (appDir / "AppRun").toString())
 
         if (DEBUG) println("Creating AppImage for ${app.name} ($architecture)")
 
@@ -121,6 +120,14 @@ abstract class LinuxBaseConfigurator : Configurator {
         } finally {
             // Cleanup build directory via registry
             TempFolderRegistry.deleteTempFolder(buildDir.toString())
+
+            // Clean up the staging appDir after AppImage is created
+            try {
+                fs.deleteRecursively(appDir)
+                if (DEBUG) println("Cleaned up staging directory: $appDir")
+            } catch (e: Exception) {
+                if (DEBUG) println("Failed to clean up staging directory: ${e.message}")
+            }
         }
     }
 }

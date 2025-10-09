@@ -70,7 +70,18 @@ object FileUtils {
         if (!fs.exists(source)) return 0
 
         var count = 0
-        if (fs.metadata(source).isDirectory) {
+        val metadata = fs.metadataOrNull(source) ?: return 0
+
+        // Handle symlinks - preserve them as symlinks
+        if (metadata.symlinkTarget != null) {
+            val target = metadata.symlinkTarget!!
+            // Create symlink at destination pointing to the same target
+            onl.ycode.koren.Files.createSymlink(target.toString(), destination.toString())
+            if (DEBUG) println("Preserved symlink: $source -> $target")
+            return 1
+        }
+
+        if (metadata.isDirectory) {
             if (!fs.exists(destination)) {
                 fs.createDirectories(destination)
             }

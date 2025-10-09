@@ -40,4 +40,7 @@ class Args : Arguments(
 
     // DMG template option
     val dmgTemplate by option()
+
+    // DMG creation options
+    val dmgCompress by option().bool().default(true).negatable()
 }

@@ -39,6 +39,7 @@ class Application(private val args: Args) {
     val notaryJson: String? get() = args.notaryJson
     val enableSigning: Boolean get() = args.enableSigning.lowercase() == "true"
     val dmgTemplate: String? get() = args.dmgTemplate
+    val dmgCompress: Boolean get() = args.dmgCompress
 
     // Creating files
 
