@@ -1,0 +1,86 @@
+name: Build and Release Linux Binary
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev upx-ucl
+
+      - name: Install Gradle
+        run: |
+          wget https://services.gradle.org/distributions/gradle-8.11-bin.zip -P /tmp
+          unzip -d /opt/gradle /tmp/gradle-8.11-bin.zip
+          echo "/opt/gradle/gradle-8.11/bin" >> $GITHUB_PATH
+
+      - name: Build and publish Koren dependency
+        run: |
+          git clone https://github.com/teras/Koren.git /tmp/Koren
+          cd /tmp/Koren
+          gradle publishToMavenLocal
+
+      - name: Build and publish argos dependency
+        run: |
+          git clone https://github.com/teras/argos.git /tmp/argos
+          cd /tmp/argos
+          gradle publishToMavenLocal
+
+      - name: Build Linux x64 Release Binary
+        run: gradle linkReleaseExecutableLinuxX64
+
+      - name: Strip and Compress Binary
+        run: |
+          strip build/bin/linuxX64/releaseExecutable/kpacker.kexe
+          upx --best --lzma build/bin/linuxX64/releaseExecutable/kpacker.kexe
+          mv build/bin/linuxX64/releaseExecutable/kpacker.kexe build/bin/linuxX64/releaseExecutable/kpacker
+          chmod +x build/bin/linuxX64/releaseExecutable/kpacker
+          ls -lh build/bin/linuxX64/releaseExecutable/kpacker
+
+      - name: Get latest tag
+        id: latest_tag
+        run: |
+          git fetch --tags
+          LATEST_TAG=$(git tag --sort=-v:refname | head -n1)
+          echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "Latest tag: $LATEST_TAG"
+
+      - name: Update Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.latest_tag.outputs.tag }}
+          name: Release ${{ steps.latest_tag.outputs.tag }}
+          draft: false
+          prerelease: false
+          files: build/bin/linuxX64/releaseExecutable/kpacker
+          generate_release_notes: false
+          body: "Latest build from main branch"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kpacker-linux-binary
+          path: build/bin/linuxX64/releaseExecutable/kpacker
+          retention-days: 1
