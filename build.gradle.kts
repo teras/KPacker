@@ -167,27 +167,8 @@ tasks.register("installNative") {
                     }
                 }
 
-                // Make executable before UPX compression
+                // Make executable
                 targetFile.setExecutable(true, false)
-
-                // Compress with UPX if available
-                try {
-                    val process = ProcessBuilder("upx", "--best", targetFile.absolutePath)
-                        .redirectErrorStream(true)
-                        .start()
-                    val upxResult = process.waitFor()
-                    val output = process.inputStream.bufferedReader().readText()
-
-                    if (upxResult == 0) {
-                        println("Compressed executable with UPX: ${targetFile.absolutePath}")
-                    } else {
-                        println("Warning: UPX compression failed for: ${targetFile.absolutePath}")
-                        println("UPX output: $output")
-                    }
-                } catch (e: Exception) {
-                    println("UPX not available, skipping compression for: ${targetFile.absolutePath}")
-                    println("Exception: ${e.message}")
-                }
 
                 // Create arch-specific directory and symlink
                 val archSpecificDir = File("$installLocation/arch/$archDir")

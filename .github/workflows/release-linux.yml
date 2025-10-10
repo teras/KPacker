@@ -26,7 +26,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libcurl4-openssl-dev upx-ucl
+          sudo apt-get install -y libcurl4-openssl-dev
 
       - name: Install Gradle
         run: |
@@ -49,10 +49,9 @@ jobs:
       - name: Build Linux x64 Release Binary
         run: gradle linkReleaseExecutableLinuxX64
 
-      - name: Strip and Compress Binary
+      - name: Strip and Prepare Binary
         run: |
           strip build/bin/linuxX64/releaseExecutable/kpacker.kexe
-          upx --best --lzma build/bin/linuxX64/releaseExecutable/kpacker.kexe
           mv build/bin/linuxX64/releaseExecutable/kpacker.kexe build/bin/linuxX64/releaseExecutable/kpacker
           chmod +x build/bin/linuxX64/releaseExecutable/kpacker
           ls -lh build/bin/linuxX64/releaseExecutable/kpacker

@@ -24,12 +24,6 @@ object MacX64Configurator : Configurator {
     override fun binLocation(name: String) = "Contents/MacOS/$name"
     override val appLocation = "Contents/app"
 
-    // Auto-detect CI/CD environment (requires sudo for mounting)
-    private val isCI: Boolean by lazy {
-        val ciEnv = onl.ycode.koren.System.getenv("CI")
-        ciEnv?.lowercase() == "true" || ciEnv == "1"
-    }
-
     override suspend fun postProcess(targetDir: String, app: Application) {
         updateMacOSTemplateFiles(targetDir, app)
     }
@@ -299,7 +293,7 @@ object MacX64Configurator : Configurator {
                     if (DEBUG) println("Found template DMG in ZIP: ${templateDmgPath.name}")
 
                     // Extract the template DMG contents to the template directory
-                    extractDMGContents(templateDmgPath, templateExtractDir, isCI)
+                    extractDMGContents(templateDmgPath, templateExtractDir)
                 } finally {
                     // Cleanup ZIP extraction directory
                     TempFolderRegistry.deleteTempFolder(zipExtractDir.toString())
@@ -308,7 +302,7 @@ object MacX64Configurator : Configurator {
             } else if (templatePath.name.lowercase().endsWith(".dmg")) {
                 // Direct DMG file - extract its contents
                 if (DEBUG) println("Template is direct DMG file, extracting contents...")
-                extractDMGContents(templatePath, templateExtractDir, isCI)
+                extractDMGContents(templatePath, templateExtractDir)
             } else {
                 throw RuntimeException("Template must be either .zip or .dmg file")
             }
@@ -335,34 +329,11 @@ object MacX64Configurator : Configurator {
             if (exitCode != 0) throw RuntimeException("Failed to format DMG as HFS+")
 
             // Mount the new DMG
-            val mountOutput = StringBuilder()
-            val mountCommand = Command("udisksctl", "loop-setup", "-f", uncompressedDmgPath.toString())
-            mountCommand.addOutListener { output ->
-                mountOutput.append(output.decodeToString())
-            }
-            exitCode = mountCommand.exec().waitFor()
-            if (exitCode != 0) throw RuntimeException("Failed to mount DMG")
-
-            // Extract loop device path
-            val loopDevice = extractLoopDevice(mountOutput.toString())
-                ?: throw RuntimeException("Could not determine loop device")
-
-            // Mount the filesystem
-            val mountFsOutput = StringBuilder()
-            val mountFsCommand = Command("udisksctl", "mount", "-b", loopDevice)
-            mountFsCommand.addOutListener { output ->
-                mountFsOutput.append(output.decodeToString())
-            }
-            exitCode = mountFsCommand.exec().waitFor()
-            if (exitCode != 0) throw RuntimeException("Failed to mount DMG filesystem")
-
-            // Extract mount point
-            val mountPoint = extractMountPoint(mountFsOutput.toString())
-                ?: throw RuntimeException("Could not determine mount point")
-
-            val mountPointPath = mountPoint.toPath()
+            val mount = mountDMG(uncompressedDmgPath, readOnly = false)
 
             try {
+                val mountPointPath = mount.mountPoint.toPath()
+
                 // Copy template contents to DMG (like merge mountdir, datafiles in Nim)
                 if (DEBUG) println("Copying template data from: $templateExtractDir")
                 fs.list(templateExtractDir).forEach { item ->
@@ -402,13 +373,7 @@ object MacX64Configurator : Configurator {
                 if (DEBUG) println("Merged template contents and replaced app bundle")
 
             } finally {
-                // Unmount filesystem
-                val unmountFsCommand = Command("udisksctl", "unmount", "-b", loopDevice)
-                unmountFsCommand.exec().waitFor()
-
-                // Detach loop device
-                val detachCommand = Command("udisksctl", "loop-delete", "-b", loopDevice)
-                detachCommand.exec().waitFor()
+                mount.cleanup()
             }
 
             // Compress DMG if requested
@@ -451,98 +416,15 @@ object MacX64Configurator : Configurator {
         }
     }
 
-    private suspend fun extractDMGContents(dmgPath: okio.Path, extractDir: okio.Path, useSudo: Boolean) {
+    private suspend fun extractDMGContents(dmgPath: okio.Path, extractDir: okio.Path) {
         val fs = FileSystem.SYSTEM
 
-        // Mount DMG directly using losetup (with sudo in CI/CD)
-        if (DEBUG) println("Setting up loop device for: $dmgPath${if (useSudo) " (CI/CD mode with sudo)" else ""}")
-        val mountOutput = StringBuilder()
-
-        // Use losetup with sudo for CI/CD environments
-        val losetupCommand = if (useSudo) {
-            Command("sudo", "losetup", "-f", "--show", dmgPath.toString())
-        } else {
-            Command("losetup", "-f", "--show", dmgPath.toString())
-        }
-
-        losetupCommand.addOutListener { output ->
-            mountOutput.append(output.decodeToString())
-            if (DEBUG) print("Loop setup: ${output.decodeToString()}")
-        }
-        losetupCommand.addErrorListener { error ->
-            if (DEBUG) print("Loop error: ${error.decodeToString()}")
-        }
-        var exitCode = losetupCommand.exec().waitFor()
-        if (exitCode != 0) throw RuntimeException("Failed to setup loop device for template DMG (exit: $exitCode)")
-
-        // Extract loop device from output (losetup outputs just the device path)
-        val loopDevice = mountOutput.toString().trim()
-        if (loopDevice.isEmpty() || !loopDevice.startsWith("/dev/loop")) {
-            throw RuntimeException("Could not determine loop device for template")
-        }
-
-        if (DEBUG) println("Loop device: $loopDevice")
-
-        // Check for partitions on the loop device using lsblk
-        val lsblkOutput = StringBuilder()
-        val lsblkCommand = Command("lsblk", "-n", "-o", "NAME", loopDevice)
-        lsblkCommand.addOutListener { output ->
-            lsblkOutput.append(output.decodeToString())
-        }
-        lsblkCommand.exec().waitFor()
-
-        // Find the right device to mount (check if there's a partition)
-        val deviceToMount = if (lsblkOutput.toString().contains("${loopDevice.removePrefix("/dev/")}p1")) {
-            "${loopDevice}p1"
-        } else {
-            loopDevice
-        }
-
-        if (DEBUG) println("Mounting device: $deviceToMount")
-
-        // Create mount point and mount with sudo if needed
-        val tempMountPoint = "/tmp/kpacker-dmg-mount-${kotlin.random.Random.nextInt(100000)}"
-
-        val mkdirCommand = if (useSudo) {
-            Command("sudo", "mkdir", "-p", tempMountPoint)
-        } else {
-            Command("mkdir", "-p", tempMountPoint)
-        }
-        exitCode = mkdirCommand.exec().waitFor()
-        if (exitCode != 0) throw RuntimeException("Failed to create mount point")
-
-        val mountCommand = if (useSudo) {
-            Command("sudo", "mount", "-t", "hfsplus", "-o", "ro", deviceToMount, tempMountPoint)
-        } else {
-            Command("mount", "-t", "hfsplus", "-o", "ro", deviceToMount, tempMountPoint)
-        }
-
-        val mountFsOutput = StringBuilder()
-        mountCommand.addOutListener { output ->
-            mountFsOutput.append(output.decodeToString())
-            if (DEBUG) print("Mount FS: ${output.decodeToString()}")
-        }
-        mountCommand.addErrorListener { error ->
-            if (DEBUG) print("Mount FS error: ${error.decodeToString()}")
-        }
-        exitCode = mountCommand.exec().waitFor()
-        if (exitCode != 0) {
-            // Cleanup on failure
-            if (useSudo) {
-                Command("sudo", "losetup", "-d", loopDevice).exec().waitFor()
-                Command("sudo", "rmdir", tempMountPoint).exec().waitFor()
-            } else {
-                Command("losetup", "-d", loopDevice).exec().waitFor()
-                Command("rmdir", tempMountPoint).exec().waitFor()
-            }
-            throw RuntimeException("Failed to mount template DMG filesystem (exit: $exitCode)")
-        }
-
-        val mountPoint = tempMountPoint
-
-        val mountPointPath = mountPoint.toPath()
+        if (DEBUG) println("Mounting template DMG: $dmgPath")
+        val mount = mountDMG(dmgPath, readOnly = true)
 
         try {
+            val mountPointPath = mount.mountPoint.toPath()
+
             // Copy ALL contents from mounted DMG to extract directory (including hidden files and metadata)
             fs.list(mountPointPath).forEach { item ->
                 val fileName = item.name
@@ -567,28 +449,7 @@ object MacX64Configurator : Configurator {
             if (DEBUG) println("Extracted template DMG contents successfully")
 
         } finally {
-            // Unmount template DMG
-            val unmountCommand = if (useSudo) {
-                Command("sudo", "umount", mountPoint)
-            } else {
-                Command("umount", mountPoint)
-            }
-            unmountCommand.exec().waitFor()
-
-            val detachCommand = if (useSudo) {
-                Command("sudo", "losetup", "-d", loopDevice)
-            } else {
-                Command("losetup", "-d", loopDevice)
-            }
-            detachCommand.exec().waitFor()
-
-            // Remove mount point
-            val rmdirCommand = if (useSudo) {
-                Command("sudo", "rmdir", mountPoint)
-            } else {
-                Command("rmdir", mountPoint)
-            }
-            rmdirCommand.exec().waitFor()
+            mount.cleanup()
         }
     }
 
@@ -624,35 +485,10 @@ object MacX64Configurator : Configurator {
             if (exitCode != 0) throw RuntimeException("Failed to format DMG as HFS+")
 
             // Mount the DMG
-            val mountOutput = StringBuilder()
-            val mountCommand = Command("udisksctl", "loop-setup", "-f", uncompressedDmgPath.toString())
-            mountCommand.addOutListener { output ->
-                mountOutput.append(output.decodeToString())
-            }
-            val mountResult = mountCommand.exec()
-            exitCode = mountResult.waitFor()
-            if (exitCode != 0) throw RuntimeException("Failed to mount DMG")
-
-            // Extract loop device path from mount output
-            val loopDevice = extractLoopDevice(mountOutput.toString())
-                ?: throw RuntimeException("Could not determine loop device")
-
-            // Mount the filesystem
-            val mountFsOutput = StringBuilder()
-            val mountFsCommand = Command("udisksctl", "mount", "-b", loopDevice)
-            mountFsCommand.addOutListener { output ->
-                mountFsOutput.append(output.decodeToString())
-            }
-            val mountFsResult = mountFsCommand.exec()
-            exitCode = mountFsResult.waitFor()
-            if (exitCode != 0) throw RuntimeException("Failed to mount DMG filesystem")
-
-            // Extract mount point from output
-            val mountPoint = extractMountPoint(mountFsOutput.toString())
-            if (mountPoint == null) throw RuntimeException("Could not determine mount point")
+            val mount = mountDMG(uncompressedDmgPath, readOnly = false)
 
             try {
-                val mountPointPath = mountPoint.toPath()
+                val mountPointPath = mount.mountPoint.toPath()
 
                 // Copy app bundle to DMG
                 FileUtils.copyDirectory(fs, appBundlePath, mountPointPath / "${app.name}.app")
@@ -663,13 +499,7 @@ object MacX64Configurator : Configurator {
                 if (DEBUG) println("Copied app bundle and created Applications symlink")
 
             } finally {
-                // Unmount filesystem
-                val unmountFsCommand = Command("udisksctl", "unmount", "-b", loopDevice)
-                unmountFsCommand.exec().waitFor()
-
-                // Detach loop device
-                val detachCommand = Command("udisksctl", "loop-delete", "-b", loopDevice)
-                detachCommand.exec().waitFor()
+                mount.cleanup()
             }
 
             // Compress DMG if requested
@@ -764,6 +594,180 @@ object MacX64Configurator : Configurator {
         // Parse output like "Mounted /dev/loop0 at /run/media/user/volume"
         val regex = Regex("Mounted .* at (.*)$")
         return regex.find(output.trim())?.groupValues?.get(1)
+    }
+
+    // Mount result with cleanup function
+    private data class MountInfo(
+        val loopDevice: String,
+        val mountPoint: String,
+        val cleanup: suspend () -> Unit
+    )
+
+    /**
+     * Mount a DMG file - tries udisksctl first (works locally), falls back to sudo (works in CI/CD).
+     * This automatically handles both simple DMGs and GPT-partitioned DMGs.
+     */
+    private suspend fun mountDMG(dmgPath: okio.Path, readOnly: Boolean = false): MountInfo {
+        // Try udisksctl first (works locally with polkit)
+        try {
+            if (DEBUG) println("Attempting to mount with udisksctl...")
+            return mountWithUdisksctl(dmgPath, readOnly)
+        } catch (e: Exception) {
+            if (DEBUG) println("udisksctl failed (${e.message}), trying sudo method...")
+            return mountWithSudo(dmgPath, readOnly)
+        }
+    }
+
+    private suspend fun mountWithUdisksctl(dmgPath: okio.Path, readOnly: Boolean): MountInfo {
+        // Setup loop device - udisksctl automatically detects and creates partition devices
+        val mountOutput = StringBuilder()
+        val loopSetupCommand = Command("udisksctl", "loop-setup", "-f", dmgPath.toString())
+        loopSetupCommand.addOutListener { output ->
+            mountOutput.append(output.decodeToString())
+        }
+        var exitCode = loopSetupCommand.exec().waitFor()
+        if (exitCode != 0) throw RuntimeException("udisksctl loop-setup failed")
+
+        val loopDevice = extractLoopDevice(mountOutput.toString())
+            ?: throw RuntimeException("Could not determine loop device")
+
+        // Try to mount the loop device - udisksctl will automatically find the right partition
+        val mountFsOutput = StringBuilder()
+        val mountOptions = if (readOnly) listOf("-o", "ro") else emptyList()
+        val mountCommand = Command("udisksctl", "mount", "-b", loopDevice, *mountOptions.toTypedArray())
+        mountCommand.addOutListener { output ->
+            mountFsOutput.append(output.decodeToString())
+        }
+        exitCode = mountCommand.exec().waitFor()
+        if (exitCode != 0) {
+            Command("udisksctl", "loop-delete", "-b", loopDevice).exec().waitFor()
+            throw RuntimeException("udisksctl mount failed")
+        }
+
+        val mountPoint = extractMountPoint(mountFsOutput.toString())
+            ?: throw RuntimeException("Could not determine mount point")
+
+        return MountInfo(
+            loopDevice = loopDevice,
+            mountPoint = mountPoint,
+            cleanup = suspend {
+                Command("udisksctl", "unmount", "-b", loopDevice).exec().waitFor()
+                Command("udisksctl", "loop-delete", "-b", loopDevice).exec().waitFor()
+                Unit
+            }
+        )
+    }
+
+    private suspend fun mountWithSudo(dmgPath: okio.Path, readOnly: Boolean): MountInfo {
+        // Setup loop device with sudo
+        val loopOutput = StringBuilder()
+        val loopError = StringBuilder()
+        val losetupCommand = Command("sudo", "losetup", "-f", "--show", dmgPath.toString())
+        losetupCommand.addOutListener { output ->
+            loopOutput.append(output.decodeToString())
+        }
+        losetupCommand.addErrorListener { error ->
+            loopError.append(error.decodeToString())
+        }
+        var exitCode = losetupCommand.exec().waitFor()
+        if (exitCode != 0) {
+            val errorMsg = "sudo losetup failed (exit $exitCode): ${loopError.toString().trim()}"
+            if (DEBUG) println(errorMsg)
+            throw RuntimeException(errorMsg)
+        }
+
+        val loopDevice = loopOutput.toString().trim()
+        if (!loopDevice.startsWith("/dev/loop")) {
+            throw RuntimeException("Invalid loop device: $loopDevice")
+        }
+
+        // Always try kpartx first to handle partitioned DMGs (especially GPT)
+        // This creates device mapper entries like /dev/mapper/loop0p1 if partitions exist
+        if (DEBUG) println("Running kpartx to detect/create partition mappings...")
+        val kpartxOutput = StringBuilder()
+        val kpartxCommand = Command("sudo", "kpartx", "-av", loopDevice)
+        kpartxCommand.addOutListener { output ->
+            kpartxOutput.append(output.decodeToString())
+        }
+        exitCode = kpartxCommand.exec().waitFor()
+
+        var deviceToMount = loopDevice
+        var usedKpartx = false
+
+        if (exitCode == 0 && kpartxOutput.toString().contains("add map")) {
+            // kpartx found partitions and created mappings
+            val mapperDevice = "/dev/mapper/${loopDevice.removePrefix("/dev/")}p1"
+            if (DEBUG) println("kpartx created partition mapping: $mapperDevice")
+            deviceToMount = mapperDevice
+            usedKpartx = true
+        } else {
+            // No partitions, use base loop device
+            if (DEBUG) println("No partitions detected, using base loop device: $loopDevice")
+        }
+
+        // Create mount point
+        val tempMountPoint = "/tmp/kpacker-dmg-${kotlin.random.Random.nextInt(100000)}"
+        val mkdirError = StringBuilder()
+        val mkdirCommand = Command("sudo", "mkdir", "-p", tempMountPoint)
+        mkdirCommand.addErrorListener { error ->
+            mkdirError.append(error.decodeToString())
+        }
+        exitCode = mkdirCommand.exec().waitFor()
+        if (exitCode != 0) {
+            if (usedKpartx) Command("sudo", "kpartx", "-dv", loopDevice).exec().waitFor()
+            Command("sudo", "losetup", "-d", loopDevice).exec().waitFor()
+            val errorMsg = "sudo mkdir failed (exit $exitCode): ${mkdirError.toString().trim()}"
+            if (DEBUG) println(errorMsg)
+            throw RuntimeException(errorMsg)
+        }
+
+        // Mount
+        val mountOptions = if (readOnly) listOf("-o", "ro") else emptyList()
+        val mountError = StringBuilder()
+        val mountCommand = Command("sudo", "mount", "-t", "hfsplus", *mountOptions.toTypedArray(), deviceToMount, tempMountPoint)
+        mountCommand.addErrorListener { error ->
+            mountError.append(error.decodeToString())
+        }
+        exitCode = mountCommand.exec().waitFor()
+        if (exitCode != 0) {
+            if (usedKpartx) Command("sudo", "kpartx", "-dv", loopDevice).exec().waitFor()
+            Command("sudo", "losetup", "-d", loopDevice).exec().waitFor()
+            Command("sudo", "rmdir", tempMountPoint).exec().waitFor()
+            val errorMsg = "sudo mount failed (exit $exitCode): ${mountError.toString().trim()}"
+            if (DEBUG) println(errorMsg)
+            throw RuntimeException(errorMsg)
+        }
+
+        // Change ownership of mount point to current user if not read-only
+        if (!readOnly) {
+            // Get current user
+            val userOutput = StringBuilder()
+            val userCommand = Command("whoami")
+            userCommand.addOutListener { output ->
+                userOutput.append(output.decodeToString())
+            }
+            exitCode = userCommand.exec().waitFor()
+            val currentUser = if (exitCode == 0) userOutput.toString().trim() else "runner"
+
+            if (DEBUG) println("Changing ownership of mount point to: $currentUser")
+            val chownCommand = Command("sudo", "chown", "-R", currentUser, tempMountPoint)
+            exitCode = chownCommand.exec().waitFor()
+            if (exitCode != 0) {
+                if (DEBUG) println("Warning: Failed to change mount point ownership (exit $exitCode)")
+            }
+        }
+
+        return MountInfo(
+            loopDevice = deviceToMount,
+            mountPoint = tempMountPoint,
+            cleanup = suspend {
+                Command("sudo", "umount", tempMountPoint).exec().waitFor()
+                if (usedKpartx) Command("sudo", "kpartx", "-dv", loopDevice).exec().waitFor()
+                Command("sudo", "losetup", "-d", loopDevice).exec().waitFor()
+                Command("sudo", "rmdir", tempMountPoint).exec().waitFor()
+                Unit
+            }
+        )
     }
 
     private suspend fun signMacOSApp(path: okio.Path, app: Application) {
