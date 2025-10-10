@@ -43,4 +43,5 @@ class Args : Arguments(
 
     // DMG creation options
     val dmgCompress by option().bool().default(true).negatable()
+    val skipDmg by option().bool().default(false)
 }

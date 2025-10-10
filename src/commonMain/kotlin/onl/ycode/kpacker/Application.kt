@@ -40,6 +40,7 @@ class Application(private val args: Args) {
     val enableSigning: Boolean get() = args.enableSigning.lowercase() == "true"
     val dmgTemplate: String? get() = args.dmgTemplate
     val dmgCompress: Boolean get() = args.dmgCompress
+    val skipDmg: Boolean get() = args.skipDmg
 
     // Creating files
 
