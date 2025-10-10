@@ -211,9 +211,16 @@ object ImageConverter {
     }
 
     /**
-     * Get a standardized PNG filename for an input image
+     * Get a standardized PNG filename for an input image based on icon type
+     * @param appName The application name
+     * @param iconType The type of icon: "app", "installer", or "document"
      */
-    fun getStandardPngName(originalPath: Path, appName: String): String {
-        return "${appName.lowercase().replace(Regex("[^a-z0-9]"), "_")}_icon.png"
+    fun getStandardPngName(appName: String, iconType: String = "app"): String {
+        val appBaseName = appName.lowercase().replace(Regex("[^a-z0-9]"), "_")
+        return when (iconType) {
+            "installer" -> "${appBaseName}_installer.png"
+            "document" -> "${appBaseName}_document.png"
+            else -> "${appBaseName}.png"
+        }
     }
 }

@@ -57,7 +57,7 @@ class Application(private val args: Args) {
         }
 
         // Convert the icon to standardized PNG format if needed
-        return convertIconToPng(originalIconPath)
+        return convertIconToPng(originalIconPath, "app")
     }
 
     suspend fun getInstallIconPath(): okio.Path? {
@@ -69,7 +69,7 @@ class Application(private val args: Args) {
         }
 
         // Convert the icon to standardized PNG format if needed
-        return convertIconToPng(originalIconPath)
+        return convertIconToPng(originalIconPath, "installer")
     }
 
     suspend fun getDocumentIconPath(): okio.Path? {
@@ -77,7 +77,7 @@ class Application(private val args: Args) {
 
         // originalIconPath is guaranteed to be non-null when documentExtensions is present (due to argos constraint)
         // Convert the icon to standardized PNG format if needed
-        return convertIconToPng(originalIconPath!!)
+        return convertIconToPng(originalIconPath!!, "document")
     }
 
     fun getDocumentExtensions(): List<String> {
@@ -99,13 +99,13 @@ class Application(private val args: Args) {
         return null
     }
 
-    private suspend fun convertIconToPng(originalIconPath: okio.Path): okio.Path? {
+    private suspend fun convertIconToPng(originalIconPath: okio.Path, iconType: String): okio.Path? {
         // If it's already a PNG, we still process it to ensure consistent sizing
         val isAlreadyPng = originalIconPath.name.lowercase().endsWith(".png")
 
         // Create temp directory for the converted icon
         val tempDir = TempFolderRegistry.createTempFolder("icon-", "-convert").toPath()
-        val convertedIconName = ImageConverter.getStandardPngName(originalIconPath, name)
+        val convertedIconName = ImageConverter.getStandardPngName(name, iconType)
         val convertedIconPath = tempDir / convertedIconName
 
         if (DEBUG) {
