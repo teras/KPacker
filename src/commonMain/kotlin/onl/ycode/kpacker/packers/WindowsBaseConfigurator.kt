@@ -139,7 +139,7 @@ abstract class WindowsBaseConfigurator : Configurator {
                                 }
                             }
 
-                            // Embed icon into the application executable using ResourceHacker
+                            // Embed icon and update version resources in the application executable
                             val appDir = outputDirPath / app.name
                             val appExePath = appDir / "${app.name}.exe"
 
@@ -152,18 +152,58 @@ abstract class WindowsBaseConfigurator : Configurator {
                                     fs.copy(appExePath, runner2.workingDir / "${app.name}.exe")
                                     fs.copy(appIconPath, runner2.workingDir / "app.ico")
 
+                                    // Step 1: Embed icon
                                     val resourceHackerCommand =
                                         runner2.run("resourcehacker -open ${app.name}.exe -save ${app.name}.exe -action addoverwrite -res app.ico -mask ICONGROUP,MAINICON")
                                     val rhExitCode = resourceHackerCommand.exec().waitFor()
                                     if (rhExitCode == 0) {
-                                        // Copy modified exe back
-                                        val resultExe = runner2.workingDir / "${app.name}.exe"
-                                        if (fs.exists(resultExe)) {
-                                            fs.copy(resultExe, appExePath)
-                                            if (DEBUG) println("Embedded icon into ${app.name}.exe using ResourceHacker")
-                                        }
+                                        if (DEBUG) println("Embedded icon into ${app.name}.exe using ResourceHacker")
                                     } else {
                                         if (DEBUG) println("Warning: Could not embed icon using ResourceHacker")
+                                    }
+
+                                    if (DEBUG) println("Starting version info update for ${app.name}.exe")
+                                    // Step 2: Generate version info from embedded template and embed it
+
+                                    // Generate version info RC from template using app metadata
+                                    val versionRcContent = generateVersionInfoRC(app)
+
+                                    // Write the RC file (UTF-8)
+                                    val versionRcPath = runner2.workingDir / "version.rc"
+                                    fs.write(versionRcPath) { writeUtf8(versionRcContent) }
+                                    if (DEBUG) println("Generated version.rc for ${app.name} version ${app.version}")
+
+                                    // Compile the RC file to RES format
+                                    val compileCmd = runner2.run("resourcehacker -open version.rc -save version.res -action compile")
+                                    if (compileCmd.exec().waitFor() == 0) {
+                                        if (DEBUG) println("Compiled version.rc successfully")
+
+                                        // Delete all existing VERSIONINFO resources first (all IDs and languages)
+                                        val deleteCmd = runner2.run("resourcehacker -open ${app.name}.exe -save ${app.name}_clean.exe -action delete -mask VERSIONINFO,,")
+                                        if (deleteCmd.exec().waitFor() == 0) {
+                                            if (DEBUG) println("Deleted all existing VERSIONINFO resources")
+
+                                            // Add the new compiled RES file (use 'add' not 'addoverwrite' since we deleted all existing)
+                                            val embedCmd = runner2.run("resourcehacker -open ${app.name}_clean.exe -save ${app.name}_new.exe -action add -res version.res")
+                                            if (embedCmd.exec().waitFor() == 0) {
+                                                // Replace original with modified
+                                                runner2.run("mv ${app.name}_new.exe ${app.name}.exe").exec().waitFor()
+                                                if (DEBUG) println("Updated version info in ${app.name}.exe with version ${app.version}")
+                                            } else {
+                                                if (DEBUG) println("Warning: Failed to embed version info")
+                                            }
+                                        } else {
+                                            if (DEBUG) println("Warning: Failed to delete existing VERSIONINFO resources")
+                                        }
+                                    } else {
+                                        if (DEBUG) println("Warning: Failed to compile version.rc")
+                                    }
+
+                                    // Copy modified exe back
+                                    val resultExe = runner2.workingDir / "${app.name}.exe"
+                                    if (fs.exists(resultExe)) {
+                                        fs.copy(resultExe, appExePath)
+                                        if (DEBUG) println("Successfully updated ${app.name}.exe with icon and version info")
                                     }
                                 } finally {
                                     // Clean up ResourceHacker working directory
@@ -282,6 +322,11 @@ abstract class WindowsBaseConfigurator : Configurator {
                 appendLine("SetupIconFile=install.ico")
             }
 
+            // Notify Windows of file association changes if document extensions are specified
+            if (app.getDocumentExtensions().isNotEmpty()) {
+                appendLine("ChangesAssociations=yes")
+            }
+
             appendLine()
 
             // Messages section for better text hierarchy
@@ -300,6 +345,13 @@ abstract class WindowsBaseConfigurator : Configurator {
             }
             appendLine()
 
+            // UninstallDelete section - remove empty directories after uninstall
+            appendLine("[UninstallDelete]")
+            appendLine("Type: dirifempty; Name: \"{app}\\app\"")
+            appendLine("Type: dirifempty; Name: \"{app}\\runtime\"")
+            appendLine("Type: dirifempty; Name: \"{app}\"")
+            appendLine()
+
             // Icons section
             appendLine("[Icons]")
             appendLine("Name: \"{group}\\{#AppName}\"; Filename: \"{app}\\{#AppName}.exe\"; WorkingDir: \"{app}\"")
@@ -307,22 +359,28 @@ abstract class WindowsBaseConfigurator : Configurator {
             appendLine("Name: \"{autodesktop}\\{#AppName}\"; Filename: \"{app}\\{#AppName}.exe\"")
             appendLine()
 
-            // Registry section for file associations
+            // Registry section for file associations (using simple approach like old installer)
             val documentExtensions = app.getDocumentExtensions()
             if (documentExtensions.isNotEmpty()) {
                 appendLine("[Registry]")
-                val documentName = app.documentName ?: "${app.name} Document"
-                val progId = "${app.name}.Document"
+                val documentName = app.documentName ?: "${app.name}"
 
                 documentExtensions.forEach { ext ->
-                    // Register file extension
-                    appendLine("Root: HKCR; Subkey: \".${ext}\"; ValueType: string; ValueName: \"\"; ValueData: \"$progId\"; Flags: uninsdeletevalue")
-                    appendLine("Root: HKCR; Subkey: \"$progId\"; ValueType: string; ValueName: \"\"; ValueData: \"$documentName\"; Flags: uninsdeletekey")
-                    if (hasDocumentIcon) {
-                        appendLine("Root: HKCR; Subkey: \"$progId\\DefaultIcon\"; ValueType: string; ValueName: \"\"; ValueData: \"{app}\\document.ico\"; Flags: uninsdeletekey")
-                    }
-                    appendLine("Root: HKCR; Subkey: \"$progId\\shell\\open\\command\"; ValueType: string; ValueName: \"\"; ValueData: \"\"\"{app}\\{#AppName}.exe\"\" \"\"%1\"\"\"; Flags: uninsdeletekey")
+                    // Register each file extension to point to app name as ProgID
+                    appendLine("Root: HKCR; Subkey: \".${ext}\"; ValueType: string; ValueName: \"\"; ValueData: \"{#AppName}\"; Flags: uninsdeletevalue")
                 }
+
+                // Register the ProgID (using app name directly, not compound like "Jubler.Document")
+                appendLine("Root: HKCR; Subkey: \"{#AppName}\"; ValueType: string; ValueName: \"\"; ValueData: \"$documentName\"; Flags: uninsdeletekey")
+
+                // Set icon for the ProgID
+                if (hasDocumentIcon) {
+                    appendLine("Root: HKCR; Subkey: \"{#AppName}\\DefaultIcon\"; ValueType: string; ValueName: \"\"; ValueData: \"{app}\\document.ico,0\"; Flags: uninsdeletekey")
+                }
+
+                // Set command to open files with this ProgID
+                appendLine("Root: HKCR; Subkey: \"{#AppName}\\shell\\open\\command\"; ValueType: string; ValueName: \"\"; ValueData: \"\"\"{app}\\{#AppName}.exe\"\" \"\"%1\"\"\"; Flags: uninsdeletekey")
+
                 appendLine()
             }
 
@@ -336,5 +394,47 @@ abstract class WindowsBaseConfigurator : Configurator {
         // Generate a simple UUID-like string based on app name
         val hash = appName.hashCode().toUInt()
         return "${hash.toString(16).padStart(8, '0')}-0000-0000-0000-000000000000".uppercase()
+    }
+
+    private fun generateVersionInfoRC(app: Application): String {
+        // Parse version string (format: X.Y.Z or X.Y.Z-ALPHA, etc.)
+        val versionParts = app.version.split("-")[0].split(".")
+        val major = versionParts.getOrNull(0)?.toIntOrNull() ?: 1
+        val minor = versionParts.getOrNull(1)?.toIntOrNull() ?: 0
+        val patch = versionParts.getOrNull(2)?.toIntOrNull() ?: 0
+        val build = 0
+
+        // Get current year for copyright
+        val currentYear = 2025  // TODO: Use actual system date when available in commonMain
+
+        return """
+// Generated by KPacker
+1 VERSIONINFO
+FILEVERSION $major,$minor,$patch,$build
+PRODUCTVERSION $major,$minor,$patch,$build
+FILEOS 0x40004
+FILETYPE 0x1
+{
+BLOCK "StringFileInfo"
+{
+	BLOCK "040904B0"
+	{
+		VALUE "CompanyName", "${app.name}"
+		VALUE "FileDescription", "${app.name}"
+		VALUE "FileVersion", "${app.version}"
+		VALUE "InternalName", "${app.name}.exe"
+		VALUE "LegalCopyright", "Copyright \xA9 $currentYear"
+		VALUE "OriginalFilename", "${app.name}.exe"
+		VALUE "ProductName", "${app.name}"
+		VALUE "ProductVersion", "${app.version}"
+	}
+}
+
+BLOCK "VarFileInfo"
+{
+	VALUE "Translation", 0x0409 0x04B0
+}
+}
+        """.trimIndent()
     }
 }
