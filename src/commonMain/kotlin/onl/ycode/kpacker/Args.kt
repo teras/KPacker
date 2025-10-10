@@ -28,6 +28,10 @@ class Args : Arguments(
     val target by option().enum<Targets>().set().required()
     val out by option().required()
     val icon by option()
+    val installIcon by option()
+    val documentIcon by option().requireIfAnyPresent(::documentExtensions).help("icon file for document types (required when --document-extensions is specified)")
+    val documentExtensions by option().help("comma-separated list of file extensions to associate with the app (e.g., \"txt,md,pdf\")")
+    val documentName by option().help("human-readable name for the document type (defaults to \"{app-name} Document\")")
     val removeTemp by option().default("true")
 
     // Apple signing options

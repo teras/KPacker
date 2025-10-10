@@ -45,6 +45,7 @@ object MacX64Configurator : Configurator {
         // Handle icon conversion and placement
         val resourcesDir = contentsDir / "Resources"
         handleIcon(resourcesDir, app)
+        handleDocumentIcon(resourcesDir, app)
 
         // Create DMG file for macOS distribution (unless skipped)
         if (app.skipDmg) {
@@ -97,16 +98,51 @@ object MacX64Configurator : Configurator {
                 .replace(Regex("<key>CFBundleShortVersionString</key>\\s*<string>.*?</string>")) {
                     "<key>CFBundleShortVersionString</key>\n  <string>${app.version}</string>"
                 }
-                // Update CFBundleVersion
-                .replace(Regex("<key>CFBundleVersion</key>\\s*<string>.*?</string>")) {
-                    "<key>CFBundleVersion</key>\n  <string>${app.version}</string>"
-                }
+                 // Update CFBundleVersion
+                 .replace(Regex("<key>CFBundleVersion</key>\\s*<string>.*?</string>")) {
+                     "<key>CFBundleVersion</key>\n  <string>${app.version}</string>"
+                 }
 
-            fs.write(infoPlistPath) { writeUtf8(infoPlistContent) }
-            if (DEBUG) println("Updated Info.plist")
-        } else {
-            if (DEBUG) println("Info.plist not found in template, creating new one")
-            createNewInfoPlist(contentsDir, app)
+             // Add document types if specified
+             val documentExtensions = app.getDocumentExtensions()
+             if (documentExtensions.isNotEmpty()) {
+                 val documentTypesXml = generateDocumentTypesXml(app, documentExtensions)
+                 // Insert before the closing </dict> tag
+                 infoPlistContent = infoPlistContent.replace("</dict>", "$documentTypesXml\n</dict>")
+             }
+
+             fs.write(infoPlistPath) { writeUtf8(infoPlistContent) }
+         } else {
+             if (DEBUG) println("Info.plist not found in template, creating new one")
+             createNewInfoPlist(contentsDir, app)
+         }
+        if (DEBUG) println("Updated Info.plist")
+    }
+
+    private fun generateDocumentTypesXml(app: Application, extensions: List<String>): String {
+        val documentName = app.documentName ?: "${app.name} Document"
+        val iconFile = "${app.name}Document.icns"
+
+        return buildString {
+            appendLine("  <key>CFBundleDocumentTypes</key>")
+            appendLine("  <array>")
+            appendLine("    <dict>")
+            appendLine("      <key>CFBundleTypeName</key>")
+            appendLine("      <string>$documentName</string>")
+            appendLine("      <key>CFBundleTypeIconFile</key>")
+            appendLine("      <string>$iconFile</string>")
+            appendLine("      <key>CFBundleTypeExtensions</key>")
+            appendLine("      <array>")
+            extensions.forEach { ext ->
+                appendLine("        <string>$ext</string>")
+            }
+            appendLine("      </array>")
+            appendLine("      <key>CFBundleTypeRole</key>")
+            appendLine("      <string>Editor</string>")
+            appendLine("      <key>LSHandlerRank</key>")
+            appendLine("      <string>Default</string>")
+            appendLine("    </dict>")
+            appendLine("  </array>")
         }
     }
 
@@ -197,6 +233,50 @@ object MacX64Configurator : Configurator {
             }
         } else {
             if (DEBUG) println("No icon found, skipping icon creation")
+        }
+    }
+
+    private suspend fun handleDocumentIcon(resourcesDir: okio.Path, app: Application) {
+        val fs = FileSystem.SYSTEM
+        val documentExtensions = app.getDocumentExtensions()
+
+        if (documentExtensions.isNotEmpty()) {
+            // Get standardized PNG document icon (guaranteed to be non-null when documentExtensions is present due to argos constraint)
+            val documentIconPath = app.getDocumentIconPath()!!
+            val targetIconPath = resourcesDir / "${app.name}Document.icns"
+
+            // The document icon is now always a standardized 512x512 PNG, so we need to convert to ICNS
+            val runner = ContainerFactory.createRunner()
+            if (DEBUG) println("Converting standardized PNG document icon to ICNS for macOS")
+            // Create temporary working directory
+            try {
+                // Copy input file to working directory
+                fs.copy(documentIconPath, runner.workingDir / documentIconPath.name)
+
+                val iconconvertCommand = runner.run("iconconvert ${documentIconPath.name} ${targetIconPath.name}")
+                val exitCode = iconconvertCommand.exec().waitFor()
+                if (exitCode != 0) {
+                    throw RuntimeException("Failed to convert document icon to ICNS format")
+                }
+
+                // Copy result back from working directory
+                val resultFile = runner.workingDir / targetIconPath.name
+                if (fs.exists(resultFile)) {
+                    fs.copy(resultFile, targetIconPath)
+                    if (DEBUG) println("Successfully converted document icon PNG to .icns")
+                } else {
+                    throw RuntimeException("ICNS document icon conversion result file not found")
+                }
+            } finally {
+                // Clean up working directory
+                try {
+                    fs.deleteRecursively(runner.workingDir)
+                } catch (e: Exception) {
+                    if (DEBUG) println("Failed to clean up document ICNS working directory: ${e.message}")
+                }
+            }
+        } else {
+            if (DEBUG) println("No document extensions specified, skipping document icon creation")
         }
     }
 

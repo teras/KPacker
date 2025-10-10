@@ -40,23 +40,37 @@ abstract class WindowsBaseConfigurator : Configurator {
         try {
             // Handle icon conversion and embedding - now using standardized PNG input
             val iconPath = app.getIconPath()
+            val installIconPath = app.getInstallIconPath()
+            val documentIconPath = app.getDocumentIconPath()
             var hasIcon = false
+            var hasDocumentIcon = false
 
-            if (iconPath != null && fs.exists(iconPath)) {
+            if (installIconPath != null && fs.exists(installIconPath)) {
                 if (DEBUG) println("Converting standardized PNG to ICO for Windows installer")
 
                 // Convert standardized PNG to ICO format using ImageMagick in container
                 val targetIconPath = installerResDir / "install.ico"
                 val appIconPath = installerResDir / "app.ico"
+                val documentIconPathIco = installerResDir / "document.ico"
 
                 val runner1 = ContainerFactory.createRunner()
-                // Create temporary working directory and copy icon
+                // Create temporary working directory and copy icons
                 try {
-                    fs.copy(iconPath, runner1.workingDir / iconPath.name)
+                    fs.copy(installIconPath, runner1.workingDir / installIconPath.name)
+                    // Also copy app icon if different from install icon
+                    if (iconPath != installIconPath && iconPath != null) {
+                        fs.copy(iconPath, runner1.workingDir / iconPath.name)
+                    }
+                    // Copy document icon if different and document extensions are specified
+                    val documentExtensions = app.getDocumentExtensions()
+                    if (documentIconPath != null && documentExtensions.isNotEmpty() &&
+                        documentIconPath != installIconPath && documentIconPath != iconPath) {
+                        fs.copy(documentIconPath, runner1.workingDir / documentIconPath.name)
+                    }
 
                     // Convert PNG to ICO using ImageMagick (create multi-size ICO)
                     val magickCommand = runner1.run(
-                        "convert ${iconPath.name} -resize 256x256 -define icon:auto-resize=256,128,64,48,32,16 install.ico"
+                        "convert ${installIconPath.name} -resize 256x256 -define icon:auto-resize=256,128,64,48,32,16 install.ico"
                     )
                     val magickExitCode = magickCommand.exec().waitFor()
                     if (magickExitCode == 0) {
@@ -64,10 +78,66 @@ abstract class WindowsBaseConfigurator : Configurator {
                         val resultFile = runner1.workingDir / "install.ico"
                         if (fs.exists(resultFile)) {
                             fs.copy(resultFile, targetIconPath)
-                            // Copy for app embedding too
-                            fs.copy(targetIconPath, appIconPath)
                             hasIcon = true
-                            if (DEBUG) println("Successfully converted PNG to multi-size ICO")
+                            if (DEBUG) println("Successfully converted install icon PNG to multi-size ICO")
+
+                            // Handle app icon separately if different from install icon
+                            if (iconPath != null && fs.exists(iconPath)) {
+                                // Convert app icon to ICO if different from install icon
+                                if (iconPath != installIconPath) {
+                                    val appMagickCommand = runner1.run(
+                                        "convert ${iconPath.name} -resize 256x256 -define icon:auto-resize=256,128,64,48,32,16 app.ico"
+                                    )
+                                    val appMagickExitCode = appMagickCommand.exec().waitFor()
+                                    if (appMagickExitCode == 0) {
+                                        val appResultFile = runner1.workingDir / "app.ico"
+                                        if (fs.exists(appResultFile)) {
+                                            fs.copy(appResultFile, appIconPath)
+                                            if (DEBUG) println("Successfully converted app icon PNG to ICO")
+                                        }
+                                    } else {
+                                        // Fall back to using install icon for app
+                                        fs.copy(targetIconPath, appIconPath)
+                                        if (DEBUG) println("Using install icon for app icon as fallback")
+                                    }
+                                } else {
+                                    // Install icon and app icon are the same
+                                    fs.copy(targetIconPath, appIconPath)
+                                }
+                            } else {
+                                // No app icon specified, use install icon
+                                fs.copy(targetIconPath, appIconPath)
+                            }
+
+                            // Handle document icon if document extensions are specified
+                            val documentExtensions = app.getDocumentExtensions()
+                            if (documentExtensions.isNotEmpty()) {
+                                // documentIconPath is guaranteed to be non-null when documentExtensions is present due to argos constraint
+                                val docIconPath = documentIconPath!!
+                                if (docIconPath != installIconPath && docIconPath != iconPath) {
+                                    // Convert document icon to ICO
+                                    val docMagickCommand = runner1.run(
+                                        "convert ${docIconPath.name} -resize 256x256 -define icon:auto-resize=256,128,64,48,32,16 document.ico"
+                                    )
+                                    val docMagickExitCode = docMagickCommand.exec().waitFor()
+                                    if (docMagickExitCode == 0) {
+                                        val docResultFile = runner1.workingDir / "document.ico"
+                                        if (fs.exists(docResultFile)) {
+                                            fs.copy(docResultFile, documentIconPathIco)
+                                            hasDocumentIcon = true
+                                            if (DEBUG) println("Successfully converted document icon PNG to ICO")
+                                        }
+                                    }
+                                } else if (docIconPath == iconPath) {
+                                    // Document icon is same as app icon
+                                    fs.copy(appIconPath, documentIconPathIco)
+                                    hasDocumentIcon = true
+                                } else {
+                                    // Document icon is same as install icon
+                                    fs.copy(targetIconPath, documentIconPathIco)
+                                    hasDocumentIcon = true
+                                }
+                            }
 
                             // Embed icon into the application executable using ResourceHacker
                             val appDir = outputDirPath / app.name
@@ -119,7 +189,7 @@ abstract class WindowsBaseConfigurator : Configurator {
             }
 
             // Generate Inno Setup script
-            val issContent = generateInnoSetupScript(app, hasIcon)
+            val issContent = generateInnoSetupScript(app, hasIcon, hasDocumentIcon)
             fs.write(installerResDir / "installer.iss") { writeUtf8(issContent) }
 
             // Use container to create Windows installer
@@ -173,7 +243,7 @@ abstract class WindowsBaseConfigurator : Configurator {
         }
     }
 
-    private fun generateInnoSetupScript(app: Application, hasIcon: Boolean): String {
+    private fun generateInnoSetupScript(app: Application, hasIcon: Boolean, hasDocumentIcon: Boolean): String {
         return buildString {
             // Define constants
             appendLine("#define AppName \"${app.name}\"")
@@ -225,6 +295,9 @@ abstract class WindowsBaseConfigurator : Configurator {
             // Files section
             appendLine("[Files]")
             appendLine("Source: \"app\\*\"; DestDir: \"{app}\"; Flags: ignoreversion recursesubdirs createallsubdirs")
+            if (hasDocumentIcon) {
+                appendLine("Source: \"document.ico\"; DestDir: \"{app}\"; Flags: ignoreversion")
+            }
             appendLine()
 
             // Icons section
@@ -233,6 +306,25 @@ abstract class WindowsBaseConfigurator : Configurator {
             appendLine("Name: \"{group}\\Uninstall {#AppName}\"; Filename: \"{uninstallexe}\"")
             appendLine("Name: \"{autodesktop}\\{#AppName}\"; Filename: \"{app}\\{#AppName}.exe\"")
             appendLine()
+
+            // Registry section for file associations
+            val documentExtensions = app.getDocumentExtensions()
+            if (documentExtensions.isNotEmpty()) {
+                appendLine("[Registry]")
+                val documentName = app.documentName ?: "${app.name} Document"
+                val progId = "${app.name}.Document"
+
+                documentExtensions.forEach { ext ->
+                    // Register file extension
+                    appendLine("Root: HKCR; Subkey: \".${ext}\"; ValueType: string; ValueName: \"\"; ValueData: \"$progId\"; Flags: uninsdeletevalue")
+                    appendLine("Root: HKCR; Subkey: \"$progId\"; ValueType: string; ValueName: \"\"; ValueData: \"$documentName\"; Flags: uninsdeletekey")
+                    if (hasDocumentIcon) {
+                        appendLine("Root: HKCR; Subkey: \"$progId\\DefaultIcon\"; ValueType: string; ValueName: \"\"; ValueData: \"{app}\\document.ico\"; Flags: uninsdeletekey")
+                    }
+                    appendLine("Root: HKCR; Subkey: \"$progId\\shell\\open\\command\"; ValueType: string; ValueName: \"\"; ValueData: \"\"\"{app}\\{#AppName}.exe\"\" \"\"%1\"\"\"; Flags: uninsdeletekey")
+                }
+                appendLine()
+            }
 
             // Run section
             appendLine("[Run]")

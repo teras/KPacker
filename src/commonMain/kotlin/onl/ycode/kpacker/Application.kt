@@ -34,6 +34,10 @@ class Application(private val args: Args) {
 
     // Helper properties for easy access to args values
     val icon: String? get() = args.icon
+    val installIcon: String? get() = args.installIcon
+    val documentIcon: String? get() = args.documentIcon
+    val documentExtensions: String? get() = args.documentExtensions
+    val documentName: String? get() = args.documentName
     val p12File: String? get() = args.p12File
     val p12Pass: String? get() = args.p12Pass
     val notaryJson: String? get() = args.notaryJson
@@ -45,7 +49,7 @@ class Application(private val args: Args) {
     // Creating files
 
     suspend fun getIconPath(): okio.Path? {
-        val originalIconPath = findOriginalIconPath()
+        val originalIconPath = findOriginalIconPath(icon, "icon")
 
         if (originalIconPath == null) {
             if (DEBUG) println("No icon found locally, downloading default icon")
@@ -56,16 +60,39 @@ class Application(private val args: Args) {
         return convertIconToPng(originalIconPath)
     }
 
-    private suspend fun findOriginalIconPath(): okio.Path? {
+    suspend fun getInstallIconPath(): okio.Path? {
+        val originalIconPath = findOriginalIconPath(installIcon, "install icon")
+
+        if (originalIconPath == null) {
+            // Fall back to app icon if no install icon specified
+            return getIconPath()
+        }
+
+        // Convert the icon to standardized PNG format if needed
+        return convertIconToPng(originalIconPath)
+    }
+
+    suspend fun getDocumentIconPath(): okio.Path? {
+        val originalIconPath = findOriginalIconPath(documentIcon, "document icon")
+
+        // originalIconPath is guaranteed to be non-null when documentExtensions is present (due to argos constraint)
+        // Convert the icon to standardized PNG format if needed
+        return convertIconToPng(originalIconPath!!)
+    }
+
+    fun getDocumentExtensions(): List<String> {
+        return documentExtensions?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
+    }
+
+    private suspend fun findOriginalIconPath(iconValue: String?, iconType: String = "icon"): okio.Path? {
         // Only use explicitly provided icon
-        val iconValue = icon
         if (iconValue != null) {
             val iconPath = iconValue.toPath()
             if (FileSystem.SYSTEM.exists(iconPath) && ImageConverter.isSupportedImageFormat(iconPath)) {
-                if (DEBUG) println("Using provided icon: $iconPath")
+                if (DEBUG) println("Using provided $iconType: $iconPath")
                 return iconPath
             } else {
-                if (DEBUG) println("Provided icon not found or unsupported format: $iconPath")
+                if (DEBUG) println("Provided $iconType not found or unsupported format: $iconPath")
             }
         }
 
