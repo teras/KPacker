@@ -26,7 +26,7 @@ object MacX64Configurator : Configurator {
 
     // Auto-detect CI/CD environment (requires sudo for mounting)
     private val isCI: Boolean by lazy {
-        val ciEnv = onl.ycode.koren.Environment.getEnv("CI")
+        val ciEnv = onl.ycode.koren.System.getenv("CI")
         ciEnv?.lowercase() == "true" || ciEnv == "1"
     }
 
