@@ -111,6 +111,30 @@ object MacX64Configurator : Configurator {
                  infoPlistContent = infoPlistContent.replace("</dict>", "$documentTypesXml\n</dict>")
              }
 
+             // Add macOS TCC privacy usage descriptions if not already present
+             val privacyKeys = listOf(
+                 "NSDocumentsFolderUsageDescription" to "${app.name} needs access to your Documents folder to save and open files.",
+                 "NSDesktopFolderUsageDescription" to "${app.name} needs access to your Desktop folder to save and open files.",
+                 "NSDownloadsFolderUsageDescription" to "${app.name} needs access to your Downloads folder to open files.",
+                 "NSRemovableVolumesUsageDescription" to "${app.name} needs access to removable volumes to save and open files.",
+                 "NSNetworkVolumesUsageDescription" to "${app.name} needs access to network volumes to save and open files."
+             )
+
+             val privacyXml = buildString {
+                 for ((key, description) in privacyKeys) {
+                     // Only add if not already present
+                     if (!infoPlistContent.contains("<key>$key</key>")) {
+                         appendLine("  <key>$key</key>")
+                         appendLine("  <string>$description</string>")
+                     }
+                 }
+             }
+
+             if (privacyXml.isNotBlank()) {
+                 // Insert before the closing </dict> tag
+                 infoPlistContent = infoPlistContent.replace("</dict>", "$privacyXml</dict>")
+             }
+
              fs.write(infoPlistPath) { writeUtf8(infoPlistContent) }
          } else {
              if (DEBUG) println("Info.plist not found in template, creating new one")
@@ -183,6 +207,20 @@ object MacX64Configurator : Configurator {
             appendLine("  <string>Copyright © 2025</string>")
             appendLine("  <key>NSHighResolutionCapable</key>")
             appendLine("  <string>true</string>")
+
+            // Add macOS TCC (Transparency, Consent, and Control) privacy usage descriptions
+            // Required for accessing protected user folders in macOS 10.15 Catalina and later
+            appendLine("  <key>NSDocumentsFolderUsageDescription</key>")
+            appendLine("  <string>${app.name} needs access to your Documents folder to save and open files.</string>")
+            appendLine("  <key>NSDesktopFolderUsageDescription</key>")
+            appendLine("  <string>${app.name} needs access to your Desktop folder to save and open files.</string>")
+            appendLine("  <key>NSDownloadsFolderUsageDescription</key>")
+            appendLine("  <string>${app.name} needs access to your Downloads folder to open files.</string>")
+            appendLine("  <key>NSRemovableVolumesUsageDescription</key>")
+            appendLine("  <string>${app.name} needs access to removable volumes to save and open files.</string>")
+            appendLine("  <key>NSNetworkVolumesUsageDescription</key>")
+            appendLine("  <string>${app.name} needs access to network volumes to save and open files.</string>")
+
             appendLine(" </dict>")
             appendLine("</plist>")
         }
