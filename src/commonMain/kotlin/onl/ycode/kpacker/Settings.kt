@@ -25,5 +25,6 @@ val PATHS =
 const val LINUX_ARM64_URL = "https://github.com/teras/KPacker/releases/download/filerepo/linux_arm64_template.zip"
 const val LINUX_X64_URL = "https://github.com/teras/KPacker/releases/download/filerepo/linux_x64_template.zip"
 const val MACOS_X64_URL = "https://github.com/teras/KPacker/releases/download/filerepo/mac_x64_template.zip"
+const val MACOS_ARM64_URL = "https://github.com/teras/KPacker/releases/download/filerepo/mac_arm64_template.zip"
 const val WINDOWS_X64_URL = "https://github.com/teras/KPacker/releases/download/filerepo/windows_x64_template.zip"
 const val APP_ICON_URL = "https://github.com/teras/KPacker/releases/download/filerepo/default_icon.png"
