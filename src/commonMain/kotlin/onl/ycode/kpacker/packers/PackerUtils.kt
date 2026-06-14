@@ -57,7 +57,7 @@ suspend fun packApp(targetDir: String, app: Application, conf: Configurator) {
 
         // Rename the extracted Launcher directory to the app name
         // For macOS, the extracted directory is Launcher.app, for others it's Launcher
-        val launcherDirName = if (conf is MacX64Configurator) "Launcher.app" else "Launcher"
+        val launcherDirName = if (conf is MacBaseConfigurator) "Launcher.app" else "Launcher"
         val launcherDir = finalOutputPath / launcherDirName
         val installDir = finalOutputPath / conf.baseDirName(app.name)
         FileUtils.safeMove(fs, launcherDir, installDir)

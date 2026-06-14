@@ -8,6 +8,6 @@ package onl.ycode.kpacker.packers
 
 import onl.ycode.kpacker.utils.PackageDownloader
 
-object MacX64Configurator : MacBaseConfigurator() {
-    override suspend fun fetchDist() = PackageDownloader.fetchMacX64()
+object MacArm64Configurator : MacBaseConfigurator() {
+    override suspend fun fetchDist() = PackageDownloader.fetchMacArm64()
 }

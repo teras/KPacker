@@ -16,6 +16,7 @@ import onl.ycode.kpacker.APP_ICON_URL
 import onl.ycode.kpacker.DEBUG
 import onl.ycode.kpacker.LINUX_ARM64_URL
 import onl.ycode.kpacker.LINUX_X64_URL
+import onl.ycode.kpacker.MACOS_ARM64_URL
 import onl.ycode.kpacker.MACOS_X64_URL
 import onl.ycode.kpacker.PACKAGE_LOCATION
 import onl.ycode.kpacker.WINDOWS_X64_URL
@@ -59,6 +60,11 @@ object PackageDownloader {
     suspend fun fetchMacX64() = fetch(
         MACOS_X64_URL,
         PACKAGE_LOCATION + "/" + MACOS_X64_URL.substringAfterLast('/')
+    )
+
+    suspend fun fetchMacArm64() = fetch(
+        MACOS_ARM64_URL,
+        PACKAGE_LOCATION + "/" + MACOS_ARM64_URL.substringAfterLast('/')
     )
 
     suspend fun fetchWindowsX64() = fetch(
