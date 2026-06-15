@@ -9,5 +9,6 @@ package onl.ycode.kpacker.packers
 import onl.ycode.kpacker.utils.PackageDownloader
 
 object MacX64Configurator : MacBaseConfigurator() {
+    override val architecture = "x86_64"
     override suspend fun fetchDist() = PackageDownloader.fetchMacX64()
 }

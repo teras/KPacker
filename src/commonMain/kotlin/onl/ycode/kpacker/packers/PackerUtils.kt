@@ -10,6 +10,9 @@ import okio.FileSystem
 import okio.Path.Companion.toPath
 import okio.SYSTEM
 import onl.ycode.koren.Files
+import onl.ycode.koren.PosixPermissions.GROUP_EXECUTE
+import onl.ycode.koren.PosixPermissions.OTHERS_EXECUTE
+import onl.ycode.koren.PosixPermissions.OWNER_EXECUTE
 import onl.ycode.kpacker.Application
 import onl.ycode.kpacker.DEBUG
 import onl.ycode.kpacker.utils.FileUtils
@@ -65,11 +68,17 @@ suspend fun packApp(targetDir: String, app: Application, conf: Configurator) {
         val appDir = installDir / conf.appLocation
 
         // Rename the launcher binary
+        val launcherBin = installDir / conf.binLocation(app.name)
         FileUtils.safeMove(
             fs,
             installDir / conf.binLocation("Launcher"),
-            installDir / conf.binLocation(app.name)
+            launcherBin
         )
+
+        // The launcher must always be executable. Some dist templates (notably the
+        // macOS arm64 one) omit it from their archive metadata, so it would otherwise
+        // ship without the +x bit and the OS would refuse to launch the app.
+        Files.addPermissions(launcherBin.toString(), OWNER_EXECUTE, GROUP_EXECUTE, OTHERS_EXECUTE)
 
         // Create app directory and install application files directly in final location
         fs.deleteRecursively(appDir)

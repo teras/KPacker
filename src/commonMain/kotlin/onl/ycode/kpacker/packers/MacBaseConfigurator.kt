@@ -22,6 +22,10 @@ abstract class MacBaseConfigurator : Configurator {
     override fun binLocation(name: String) = "Contents/MacOS/$name"
     override val appLocation = "Contents/app"
 
+    // Architecture tag embedded in the produced DMG file name (e.g. "x86_64", "arm64"),
+    // mirroring the Linux/Windows targets so every macOS DMG is unambiguous.
+    abstract val architecture: String
+
     override suspend fun postProcess(targetDir: String, app: Application) {
         updateMacOSTemplateFiles(targetDir, app)
     }
@@ -56,7 +60,7 @@ abstract class MacBaseConfigurator : Configurator {
         // Sign app bundle and DMG if signing is enabled
         if (app.enableSigning) {
             signMacOSApp(appBundleDir, app)
-            val dmgPath = outputDirPath / "${app.name}-${app.version}.dmg"
+            val dmgPath = outputDirPath / "${app.name}-${app.version}-$architecture.dmg"
             if (fs.exists(dmgPath)) {
                 signMacOSApp(dmgPath, app)
                 notarizeMacOSApp(dmgPath, app)
@@ -350,7 +354,7 @@ abstract class MacBaseConfigurator : Configurator {
         val fs = FileSystem.SYSTEM
         val outputDirPath = outputDir.toPath()
         val appBundlePath = outputDirPath / "${app.name}.app"
-        val dmgPath = outputDirPath / "${app.name}-${app.version}.dmg"
+        val dmgPath = outputDirPath / "${app.name}-${app.version}-$architecture.dmg"
 
         if (DEBUG) println("Creating DMG for ${app.name}${if (!app.dmgCompress) " (uncompressed)" else ""}")
 
@@ -505,7 +509,7 @@ abstract class MacBaseConfigurator : Configurator {
                     "docker.io/teras/appimage-builder",
                     "sh",
                     "-c",
-                    "dmg /data/${app.name}-${app.version}-uncompressed.dmg /data/${app.name}-${app.version}.dmg"
+                    "dmg /data/${uncompressedDmgPath.name} /data/${dmgPath.name}"
                 )
                 exitCode = containerCommand.exec().waitFor()
                 if (exitCode != 0) throw RuntimeException("Failed to compress DMG")
@@ -631,7 +635,7 @@ abstract class MacBaseConfigurator : Configurator {
                     "docker.io/teras/appimage-builder",
                     "sh",
                     "-c",
-                    "dmg /data/${app.name}-${app.version}-uncompressed.dmg /data/${app.name}-${app.version}.dmg"
+                    "dmg /data/${uncompressedDmgPath.name} /data/${dmgPath.name}"
                 )
                 exitCode = containerCommand.exec().waitFor()
                 if (exitCode != 0) throw RuntimeException("Failed to compress DMG")
